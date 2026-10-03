@@ -1,5 +1,5 @@
 import express from 'express';
-import { appointments, assignTask, blocks, containerDetail, containers, createContainer, createGateAppointment, createYardTask, dashboard, deleteContainer, deleteGateAppointment, deleteYardTask, editGateAppointment, equipment, gateConflicts, prioritizeTasks, tasks, updateContainer, updateYardTask, voyages, yardHeatmap } from './domain.js';
+import { addRailContainers, appointments, assignTask, auditEvents, blocks, cancelRailBatch, changeRailWindow, containerDetail, containers, createContainer, createGateAppointment, createRailBatch, createYardTask, dashboard, deleteContainer, deleteGateAppointment, deleteYardTask, departRailBatch, editGateAppointment, equipment, gateConflicts, holdCustomsRailContainer, prioritizeTasks, railArrivalScan, railBatchList, railBatchView, railGateScan, railRosterCandidates, railStageScan, releaseCustomsRailContainer, resealRailBatch, resolveMismatchRailContainer, sealRailBatch, tasks, unsealRailBatch, updateContainer, updateYardTask, voyages, withdrawRailContainer, yardHeatmap } from './domain.js';
 const app = express(); app.use(express.json());
 app.get('/api/dashboard', (_req, res) => res.json(dashboard()));
 app.get('/api/voyages', (_req, res) => res.json(voyages));
@@ -21,5 +21,27 @@ app.post('/api/tasks', (req, res) => { try { res.status(201).json(createYardTask
 app.patch('/api/tasks/:id', (req, res) => { try { const result = updateYardTask(req.params.id, req.body); if (!result) return res.status(404).json({ message: '作业任务不存在' }); res.json(result); } catch (error) { res.status(409).json({ message: error instanceof Error ? error.message : '更新作业任务失败' }); } });
 app.delete('/api/tasks/:id', (req, res) => { const result = deleteYardTask(req.params.id); if (!result) return res.status(404).json({ message: '作业任务不存在' }); res.json({ deleted: true, id: result.id }); });
 app.patch('/api/tasks/:id/assign', (req, res) => { const result = assignTask(req.params.id, req.body.equipmentId); if (!result) return res.status(404).json({ message: '任务或设备不存在' }); res.json(result); });
+
+// ── 铁路交接批次 ──
+app.get('/api/rail/batches', (_req, res) => res.json(railBatchList()));
+app.get('/api/rail/batches/:id', (req, res) => { const view = railBatchView(req.params.id); if (!view) return res.status(404).json({ message: '铁路批次不存在' }); res.json(view); });
+app.get('/api/rail/batches/:id/audit', (req, res) => { const view = railBatchView(req.params.id); if (!view) return res.status(404).json({ message: '铁路批次不存在' }); res.json(auditEvents.filter(event => event.entityId === req.params.id)); });
+app.get('/api/rail/candidates/:direction', (req, res) => { const direction = String(req.params.direction); if (!['import', 'export', 'transshipment'].includes(direction)) return res.status(400).json({ message: '方向必须是 import / export / transshipment' }); res.json(railRosterCandidates(direction as 'import' | 'export' | 'transshipment')); });const railAction = <T>(fn: (id: string, body: T) => unknown) => (req: express.Request, res: express.Response) => { try { res.json(fn(String(req.params.id), req.body)); } catch (error) { res.status(409).json({ message: error instanceof Error ? error.message : '铁路批次操作失败' }); } };
+app.post('/api/rail/batches', (req, res) => { try { res.status(201).json(createRailBatch(req.body)); } catch (error) { res.status(409).json({ message: error instanceof Error ? error.message : '创建铁路批次失败' }); } });
+app.post('/api/rail/batches/:id/containers', railAction((id, body: { containerIds: string[]; operator?: string }) => addRailContainers(id, body.containerIds ?? [], body.operator)));
+app.post('/api/rail/batches/:id/withdraw', railAction((id, body: { containerId: string; reason: string; operator?: string }) => withdrawRailContainer(id, body.containerId, body.reason, body.operator)));
+app.post('/api/rail/batches/:id/scan/staging', railAction((id, body: { containerId: string; operator?: string }) => railStageScan(id, body.containerId, body.operator)));
+app.post('/api/rail/batches/:id/scan/gate', railAction((id, body: { containerId: string; operator?: string }) => railGateScan(id, body.containerId, body.operator)));
+app.post('/api/rail/batches/:id/scan/arrival', railAction((id, body: { containerId: string; operator?: string }) => railArrivalScan(id, body.containerId, body.operator)));
+app.post('/api/rail/batches/:id/seal', railAction((id, _body) => sealRailBatch(id)));
+app.post('/api/rail/batches/:id/unseal', railAction((id, body: { reason: 'customs-inspection' | 'number-mismatch' | 'window-change'; requestedBy?: string; note: string }) => unsealRailBatch(id, body)));
+app.post('/api/rail/batches/:id/reseal', railAction((id, _body) => resealRailBatch(id)));
+app.post('/api/rail/batches/:id/depart', railAction((id, _body) => departRailBatch(id)));
+app.post('/api/rail/batches/:id/cancel', railAction((id, body: { reason: string }) => cancelRailBatch(id, body.reason)));
+app.post('/api/rail/batches/:id/window', railAction((id, body: { railWindowStart: string; railWindowEnd: string; reason: string }) => changeRailWindow(id, body.railWindowStart, body.railWindowEnd, body.reason)));
+app.post('/api/rail/batches/:id/customs/hold', railAction((id, body: { containerId: string; note: string; operator?: string }) => holdCustomsRailContainer(id, body.containerId, body.note ?? '', body.operator)));
+app.post('/api/rail/batches/:id/customs/release', railAction((id, body: { containerId: string; note?: string; operator?: string }) => releaseCustomsRailContainer(id, body.containerId, body.note ?? '', body.operator)));
+app.post('/api/rail/batches/:id/mismatch/resolve', railAction((id, body: { containerId: string; resolution: 'confirmed' | 'swap'; actualContainerId?: string }) => resolveMismatchRailContainer(id, body.containerId, body.resolution, body.actualContainerId)));
+
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'port-yard-operations' }));
 const port = Number(process.env.PORT || 4107); app.listen(port, () => console.log(`port yard API listening on ${port}`));
